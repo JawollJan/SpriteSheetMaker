@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFont
 import os
 
 
-def assemble_sprite_sheet(root_folder, output_path="sprite_sheet.png", font_size=24, margin=15):
+def assemble_sprite_sheet(root_folder, output_path, font_size=24, margin=15):
 
     print(f"[SpriteSheetMaker] Creating sprite sheet for folder '{root_folder}'")
 
@@ -70,9 +70,17 @@ def assemble_sprite_sheet(root_folder, output_path="sprite_sheet.png", font_size
         print(f"[SpriteSheetMaker] '{label}' row dimensions will be {row_width}x{row_height} with {len(img_objects)} frames")
 
 
+    # Get image mode of first image
+    print(f"[SpriteSheetMaker] Getting mode of first image")
+    img_mode = "RGBA"
+    label, images = rows[0]
+    if(len(images) !=0 ):
+        img_mode = images[0].mode
+
+
     # Create sprite sheet of appropriate size
     print(f"[SpriteSheetMaker] Creating sprite sheet canvas: {total_width}x{total_height}")
-    sheet = Image.new("RGBA", (total_width, total_height), (0, 0, 0, 0))
+    sheet = Image.new(img_mode, (total_width, total_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(sheet)
 
 

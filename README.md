@@ -168,6 +168,12 @@ This is not an addon issue it's just how Blender works while rendering, Try unli
 **_How do I see the progress of sprite sheet creation?_**  
 You need to open Blender via [console](https://www.youtube.com/watch?v=ijngHwCoDQo) where you can see exactly what the plugin is currently doing
 
+<br/>
+
+**_Why isn't the background transparent?_**  
+1. This is not a plugin issue, you have to manually set it in `Render Properties > Film > Transparent` and enable it as shown [here](https://www.youtube.com/watch?v=kgqvS69_X98)
+2. Make sure Output `Properties > Color` is set to RGBA & that `File Format` is .png 
+
 
 
 ## Credits

@@ -370,6 +370,11 @@ class SpriteSheetMaker():
         self.on_sprite_creating.broadcast(param)
 
 
+        # Change render to image type
+        if(bpy.context.scene.render.image_settings.media_type != 'IMAGE'):
+            bpy.context.scene.render.image_settings.media_type = 'IMAGE'
+
+
         # Store old resolutions
         old_resolution_x = bpy.context.scene.render.resolution_x
         old_resolution_y = bpy.context.scene.render.resolution_y
@@ -478,7 +483,7 @@ class SpriteSheetMaker():
                 bpy.context.scene.frame_set(frame)
 
                 # Render a single sprite
-                param.output_file_path = f"{action_dir}/{frame}.png"
+                param.output_file_path = f"{action_dir}/{frame}.{bpy.context.scene.render.image_settings.file_format.lower()}"
                 self.create_sprite(param, False, False)
 
                 # Notify frame completed

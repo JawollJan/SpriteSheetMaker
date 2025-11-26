@@ -26,8 +26,8 @@ from bpy.props import (
 # Constants
 DEFAULT_DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 SPRITE_SHEET_MAKER = SpriteSheetMaker()
-SINGLE_SPRITE_NAME = "sprite.png"
-SPRITE_SHEET_NAME = "sprite_sheet.png"
+SINGLE_SPRITE_NAME = "sprite"
+SPRITE_SHEET_NAME = "sprite_sheet"
 PIXELATE_TEST_IMAGE_POSTFIX = "pixelated"
 has_dep_cache = False
 
@@ -671,7 +671,7 @@ def sprite_param_from_props(is_sheet = True):
 
 
     # Set path to where sprite should be created
-    param.output_file_path = f"{props.output_path}/{SPRITE_SHEET_NAME if is_sheet else SINGLE_SPRITE_NAME}"
+    param.output_file_path = f"{props.output_path}/{SPRITE_SHEET_NAME if is_sheet else SINGLE_SPRITE_NAME}.{bpy.context.scene.render.image_settings.file_format.lower()}"
 
 
     # Get all actions
