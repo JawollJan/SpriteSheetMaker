@@ -69,7 +69,7 @@ class Event:
         for func in list(self._subscribers):
             func(*args, **kwargs)
 
-def setup_camera(bounding_box: tuple[Vector, Vector] = (Vector(), Vector()), direction: CameraDirection = CameraDirection.NEG_X, pixels_per_meter: int = 500):
+def setup_auto_camera(bounding_box: tuple[Vector, Vector] = (Vector(), Vector()), direction: CameraDirection = CameraDirection.NEG_X, pixels_per_meter: int = 500):
 
     # Split bounding box into min & max vertices
     min_v, max_v = bounding_box
@@ -265,8 +265,8 @@ def pixelate_image(image_path: str, param: PixelateParam, output_image_path = No
 
     # Assign image which is to be pixelated
     image_node = pixelate_tree.nodes.get(IMAGE_INPUT_NODE)
+    image = bpy.data.images.load(image_path)
     if image_node is not None:
-        image = bpy.data.images.load(image_path)
         image_node.image = image
 
 
@@ -302,8 +302,9 @@ def pixelate_image(image_path: str, param: PixelateParam, output_image_path = No
 
     # Render image
     print(f"[SpriteSheetMaker] Rendering pixelated sprite")
-    bpy.context.scene.render.resolution_x = int(old_resolution_x * (1.0 - param.pixelation_amount))  # Shrink resolution before rendering
-    bpy.context.scene.render.resolution_y = int(old_resolution_y * (1.0 - param.pixelation_amount))
+    width, height = image.size
+    bpy.context.scene.render.resolution_x = int(width * (1.0 - param.pixelation_amount))  # Shrink resolution before rendering
+    bpy.context.scene.render.resolution_y = int(height * (1.0 - param.pixelation_amount))
     render(image_path if (output_image_path is None) else output_image_path)
 
 
@@ -336,25 +337,55 @@ def create_folder(at_path, folder_name):
 
     return folder_path
 
-def hide_visible_objects(ignore_objects = set()):
-    hidden_objects = set()
+def objects_linked_to_action(action):
+    linked_objects = set()
+    
 
-    # Iterate through all visible objects and hide whichever aren't to be ignored
-    visible_objects = set(obj for obj in bpy.context.view_layer.objects if obj.visible_get())
-    for obj in visible_objects:
-        if obj in ignore_objects:
+    # Return if action does not exist
+    if action is None:
+        return linked_objects
+
+
+    # Iterate through all objects in the scene
+    for obj in bpy.data.objects:
+        # Skip if object does not have animation data
+        if not obj.animation_data:
+            continue
+            
+        
+        # Check active action
+        if obj.animation_data.action == action:
+            linked_objects.add(obj)
             continue
 
-        obj.hide_render = True
-        obj.hide_viewport = True
-        hidden_objects.add(obj)
-    
-    return hidden_objects
 
-def unhide_objects(objects):
-    for obj in objects:
-        obj.hide_render = False
-        obj.hide_viewport = False
+        # Return if object does not have nla tracks
+        if not obj.animation_data.nla_tracks:
+            continue
+
+
+        # Check all NLA tracks
+        for track in obj.animation_data.nla_tracks:
+
+            # Check all strips
+            found_object = False
+            for strip in track.strips:
+                if strip.action == action:
+                    linked_objects.add(obj)
+                    found_object = True
+                    break
+            
+            # Break from loop if already found
+            if found_object:
+                break
+        
+
+        # Check Armature (older workflows)
+        if obj.type == 'ARMATURE' and obj.data.animation_data and obj.data.animation_data.action == action:
+            linked_objects.add(obj)
+
+
+    return linked_objects
 
 class SpriteSheetMaker():
     def __init__(self):
@@ -365,7 +396,7 @@ class SpriteSheetMaker():
         self.on_sheet_frame_creating = Event()  # action_name, frame
         self.on_sheet_frame_created = Event()   # action_name, frame
     
-    def create_sprite(self, param: SpriteParam, hide_other_objects = True, delete_camera = True):
+    def create_sprite(self, param: SpriteParam, delete_auto_camera = True):
 
         self.on_sprite_creating.broadcast(param)
 
@@ -375,16 +406,9 @@ class SpriteSheetMaker():
             bpy.context.scene.render.image_settings.media_type = 'IMAGE'
 
 
-        # Store old resolutions
+        # Store old resolutions, Incase of pixelation
         old_resolution_x = bpy.context.scene.render.resolution_x
         old_resolution_y = bpy.context.scene.render.resolution_y
-
-
-        # Hide all other objects which are not part of sprite
-        hidden_objects = set()
-        if(hide_other_objects):
-            print(f"[SpriteSheetMaker] Hiding all objects except {param.objects}")
-            hidden_objects = hide_visible_objects(param.objects)
 
 
         # Setup camera according to bounding box & other parameters
@@ -393,7 +417,7 @@ class SpriteSheetMaker():
         if camera is None:
             bbox = get_bounding_box(param.objects, not param.consider_armature_bones)
             bbox = extend_bounding_box(bbox, param.camera_padding)
-            camera = setup_camera(bbox, param.camera_direction, param.pixels_per_meter)
+            camera = setup_auto_camera(bbox, param.camera_direction, param.pixels_per_meter)
 
 
         # Make sure camera is being used to render
@@ -411,14 +435,8 @@ class SpriteSheetMaker():
             pixelate_image(param.output_file_path, param.pixelate_param)
 
 
-        # Unhide previously hidden objects
-        if(hide_other_objects):
-            print(f"[SpriteSheetMaker] Unhiding the following objects {hidden_objects}")
-            unhide_objects(hidden_objects)
-        
-
         # Delete camera after render
-        if(delete_camera):
+        if(delete_auto_camera):
             cam_obj = bpy.data.objects.get(CAMERA_NAME)
             if cam_obj is not None:
                 bpy.data.objects.remove(cam_obj, do_unlink=True) 
@@ -441,11 +459,6 @@ class SpriteSheetMaker():
         sprite_sheet_path = param.output_file_path
 
 
-        # Hide all other objects which are not part of sheet
-        hidden_objects = hide_visible_objects(param.objects)
-        print(f"[SpriteSheetMaker] Following objects were hidden {hidden_objects}")
-
-
         # Iterate through actions and capture render for each frame (Each action should have it's own folder (in order) & image names should be 1, 2, 3 for each frame respectively)
         for i, action in enumerate(param.actions):
 
@@ -456,19 +469,11 @@ class SpriteSheetMaker():
             self.on_sheet_row_creating.broadcast(action.name, int(action.frame_range[1]))
 
 
-            # Assign action to all objects
-            for obj in bpy.data.objects:
-                if obj.animation_data is None:
-                    continue
-                
-                # Assign action
+            # Assign action to all linked objects
+            linked_objects = objects_linked_to_action(action)
+            for obj in linked_objects:
                 anim_data = obj.animation_data
                 anim_data.action = action
-
-                # Assign slot
-                suitable = anim_data.action_suitable_slots
-                if suitable:
-                    anim_data.action_slot = suitable[0] if suitable else action.slots[0]  # fallback: pick first slot
 
 
             # Iterate through all frames
@@ -484,7 +489,7 @@ class SpriteSheetMaker():
 
                 # Render a single sprite
                 param.output_file_path = f"{action_dir}/{frame}.{bpy.context.scene.render.image_settings.file_format.lower()}"
-                self.create_sprite(param, False, False)
+                self.create_sprite(param, False)
 
                 # Notify frame completed
                 self.on_sheet_frame_created.broadcast(action.name, frame)
@@ -492,10 +497,6 @@ class SpriteSheetMaker():
             
             # Notify action completed
             self.on_sheet_row_created.broadcast(action.name, int(action.frame_range[1]))
-
-
-        # Unhide previously hidden objects
-        unhide_objects(hidden_objects)
 
 
         # Combine images together into single file and paste in output

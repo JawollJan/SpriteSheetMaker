@@ -119,7 +119,7 @@ class SpriteSheetMakerProperties(PropertyGroup):
     )
     color_amount: FloatProperty(name="Pixelation Color Amount", default=50.0, min=0.0, soft_max=1000)
     min_alpha: FloatProperty(name="Min Alpha", default=0.0, min=0.0, max=1.0)
-    alpha_step: FloatProperty(name="Alpha Step", default=0.33, min=0.0, max=1.0)
+    alpha_step: FloatProperty(name="Alpha Step", default=0.001, min=0.0, max=1.0)
     pixelate_image_path: StringProperty(
         name="Pixelate Image Path",
         subtype="FILE_PATH"
@@ -387,8 +387,8 @@ class SPRITESHEETMAKER_OT_CreateSingleSprite(bpy.types.Operator):
 
 
         # Return if no objects given
-        if(len(param.objects) == 0):
-            popup("Empty or invalid objects!", "CANCEL")
+        if(props.auto_camera and len(param.objects) == 0):
+            popup("Empty or invalid objects to capture!", "CANCEL")
             return {'FINISHED'}
 
             
@@ -425,14 +425,14 @@ class SPRITESHEETMAKER_OT_CreateSheet(Operator):
 
         # Check for valid actions
         if(len(param.actions) == 0):
-            popup("Empty or invalid actions!", "CANCEL")
+            popup("Empty or invalid actions to capture!", "CANCEL")
             return {'FINISHED'}
 
 
         # Checks based on auto camera on or off
         if(props.auto_camera):
             if(len(param.objects) == 0):
-                popup("Empty or invalid objects!", "CANCEL")
+                popup("Empty or invalid objects to capture!", "CANCEL")
                 return {'FINISHED'}
         else:
             # Return if manual cameras has not been set

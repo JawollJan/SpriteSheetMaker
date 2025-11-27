@@ -42,7 +42,7 @@ An addon to convert your 3D animations into 2D sprite sheets with in-built toggl
 
 ## 🧭 Usage
 1. **Objects to Capture:**   
-   This contains a list of all objects within the scene that are to be added to the sprite or sprite sheet, Any object not in this list will be hidden during rendering
+    This contains a list of all the objects used to calculate the auto-camera's frame such that they are within view at all time (You can leave this blank if not using `Auto Camera`)
 
 2. **Consider Armature Bones:**  
    If this is enabled then the bones of the armature(s) are also taken into consideration when calculating the size of each sprite frame
@@ -122,10 +122,11 @@ An addon to convert your 3D animations into 2D sprite sheets with in-built toggl
 
 
 ## ⚙️ How this works?
-1. Iterates over each action frame by frame
-2. (If Auto Camera) Calculates bounding box based on objects to capture
-3. (If Auto Camera) Sets camera according to bounding box
-4. Renders image & stores into a temp folder based on action as sub folder & frame number, The folder structure is as such:
+1. Assigns action to relevant objects i.e. objects which are affected by that action
+2. Iterates over each action frame by frame
+3. (If Auto Camera) Calculates bounding box based on objects to capture
+4. (If Auto Camera) Sets camera according to bounding box
+5. Renders image & stores into a temp folder based on action as sub folder & frame number, The folder structure is as such:
    ```
    SpriteSheetMakerTemp/
    ├── 0_Idle/
@@ -139,13 +140,13 @@ An addon to convert your 3D animations into 2D sprite sheets with in-built toggl
       └── 2.png
    ```
    You can see this folder if you uncheck `Delete Temp Folder`
-5. (If To Pixelate) Re-renders the image pixelated via compositor, If compositor node group not found then it is appended from `SpriteSheetMaker.blend`
-6. Once all images are rendered, retrieves them from temp folder and uses `pillow` package to stitch together all images (while also adding labels based on action name) into a single sprite sheet
+6. (If To Pixelate) Re-renders the image pixelated via compositor, If compositor node group not found then it is appended from `SpriteSheetMaker.blend`
+7. Once all images are rendered, retrieves them from temp folder and uses `pillow` package to stitch together all images (while also adding labels based on action name) into a single sprite sheet
 
 
 
 ## ❓ Common Questions
-**_Why is my sprite empty / not showing?_**  
+**_Why is my sprite empty / not showing any objects?_**  
 1. Make sure you've added the desired objects to `Objects to Capture`
 2. Make sure `Pixels Per Meter` isn't 0 or too small 
 3. Make sure you've added lights  
@@ -173,6 +174,19 @@ You need to open Blender via [console](https://www.youtube.com/watch?v=ijngHwCoD
 **_Why isn't the background transparent?_**  
 1. This is not a plugin issue, you have to manually set it in `Render Properties > Film > Transparent` and enable it as shown [here](https://www.youtube.com/watch?v=kgqvS69_X98)
 2. Make sure Output `Properties > Color` is set to RGBA & that `File Format` is .png 
+
+<br/>
+
+**_How to recontinue interrupted rendering of sprite sheet?_**  
+1. Locate the incomplete "SpriteMakerTemp" folder (or whichever folder you were rendering your sprite frames into) and see which actions have not rendered all frames or are missing
+2. Then add those missing/incomplete actions to `Actions to Capture` and uncheck the `Delete Temp Folder` and creating a spritesheet (to get a new "SpriteMakerTemp")
+3. Merge the old and new "SpriteMakerTemp" folders together according to the structure mentioned in "How this works?"
+4. Then use the `Combine Sprites` button to get a complete spritesheet
+
+<br/>
+
+> **Note:**  
+> Remember this is just a tool to help with your workflow and if you want to make really good art I recommend you also paint over the spritesheet yourself 🙂
 
 
 

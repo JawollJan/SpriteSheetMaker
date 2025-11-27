@@ -12,7 +12,7 @@ def assemble_sprite_sheet(root_folder, output_path, font_size=24, margin=15):
 
 
     # Load font
-    font = ImageFont.load_default(font_size)
+    font = ImageFont.load_default(font_size) if font_size !=0 else None
 
 
     # Get all action sub folders & sort them
@@ -50,9 +50,13 @@ def assemble_sprite_sheet(root_folder, output_path, font_size=24, margin=15):
         rows.append((label, img_objects))
 
         # Get label height & width
-        bbox = font.getbbox(label)
-        label_height = (bbox[3] - bbox[1]) + (margin * 2)
-        label_width = (bbox[2] - bbox[0]) + (margin * 2)
+        bbox = (0, 0, 0, 0)
+        label_height = 0
+        label_width = 0
+        if(font_size != 0):
+            bbox = font.getbbox(label)
+            label_height = (bbox[3] - bbox[1]) + (margin * 2)
+            label_width = (bbox[2] - bbox[0]) + (margin * 2)
 
         # Get height of tallest sprite & combined width of all sprites 
         max_frame_height = max(img.height for img in img_objects)
@@ -92,18 +96,25 @@ def assemble_sprite_sheet(root_folder, output_path, font_size=24, margin=15):
         if not imgs:
             continue
 
-        # Add margin above label
-        y_offset += margin
 
         # Draw label
-        bbox = font.getbbox(label)
-        label_height = bbox[3] - bbox[1] 
-        draw.text((margin, y_offset - bbox[1]), label, fill="white", font=font, spacing = 0)
-        print(f"[SpriteSheetMaker] Drawing label '{label}' at y={y_offset}")
-        y_offset += label_height
+        bbox = (0, 0, 0, 0)
+        if(font_size != 0):
 
-        # Add margin below label
-        y_offset += margin
+            # Add margin above label
+            y_offset += margin
+
+            bbox = font.getbbox(label)
+            label_height = bbox[3] - bbox[1] 
+            draw.text((margin, y_offset - bbox[1]), label, fill="white", font=font, spacing = 0)
+            print(f"[SpriteSheetMaker] Drawing label '{label}' at y={y_offset}")
+
+            # Add font height
+            y_offset += label_height
+
+            # Add margin below label
+            y_offset += margin
+
 
         # Paste images horizontally (bottom aligned)
         x_offset = margin
