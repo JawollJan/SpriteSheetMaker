@@ -1,15 +1,13 @@
 bl_info = {
     "name": "Sprite Sheet Maker",
     "author": "Manas R. Makde",
-    "version": (1, 0, 0),
-    "description": "Creates Sprite Sheet from actions",
-    "warning": "Requires internet access for one-time pip package installation and Blender restart"
+    "version": (1, 1, 0),
+    "description": "3D to 2D sprite sheet converter with optional pixelation"
 }
 
 
 import bpy
 import os
-from .install_dependencies import *
 from .sprite_sheet_maker_utils import *
 from bpy.types import Panel, Operator, PropertyGroup, UIList
 from bpy.props import (
@@ -24,20 +22,10 @@ from bpy.props import (
 
 
 # Constants
-DEFAULT_DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 SPRITE_SHEET_MAKER = SpriteSheetMaker()
 SINGLE_SPRITE_NAME = "sprite"
 SPRITE_SHEET_NAME = "sprite_sheet"
 PIXELATE_TEST_IMAGE_POSTFIX = "pixelated"
-has_dep_cache = False
-
-
-# Enums
-class DependencyStatus(Enum):
-    PENDING = ('PENDING', "Pending Install", "Waiting to install dependencies")
-    INSTALLING = ('INSTALLING', "Installing...", "Currently installing dependencies")
-    ERROR = ('ERROR', "Installation Error", "Failed to install dependencies")
-    INSTALLED = ('INSTALLED', "Installed", "installed dependencies")
 
 
 # Classes
@@ -68,14 +56,6 @@ class SpriteSheetMakerActionItem(PropertyGroup):
     action: PointerProperty(name="Action", type=bpy.types.Action)
 
 class SpriteSheetMakerProperties(PropertyGroup):
-
-    # Dependency info
-    dependency_status: EnumProperty(
-        items=[member.value for member in DependencyStatus],
-        name="Pillow Installation Status",
-        description="Current status of the Pillow installation",
-        default=DependencyStatus.PENDING.name
-    )
 
     # Objects info
     objects_to_use: CollectionProperty(type=SpriteSheetMakerObjectItem)
@@ -135,71 +115,9 @@ class SpriteSheetMakerProperties(PropertyGroup):
     frame_margin: IntProperty(name="Frame Margin", default=15, min=0, soft_max=1000)
     output_path: StringProperty(
         name="Output Folder",
-        subtype="DIR_PATH",
-        default=DEFAULT_DESKTOP if os.path.isdir(DEFAULT_DESKTOP) else ""
+        subtype="DIR_PATH"
     )
     delete_temp_folder: BoolProperty(name="Delete Temp Folder", default=True)
-
-class SPRITESHEETMAKER_OT_dependencies(bpy.types.Operator):
-    bl_idname = "dependencies.install"
-    bl_label = "Install Dependencies"
-    bl_options = {'REGISTER'}
-
-    def execute(self, context):
-
-        # Get props
-        props = context.scene.sprite_sheet_maker_props
-
-
-        # Return if already has dependencies
-        if has_dependencies():
-            print("[SpriteSheetMaker] Dependencies are already installed")
-            props.dependency_status = DependencyStatus.INSTALLED.name
-            return {'FINISHED'}
-        
-
-        # Set the state to installing
-        props.dependency_status = DependencyStatus.INSTALLING.name
-        
-
-        # Force a redraw
-        if context.area:
-            context.area.tag_redraw()
-        
-
-        # Deferred function to install all dependencies and update panel accordingly
-        def install_dep():
-
-            # Final status to be set
-            install_status = DependencyStatus.PENDING.name
-
-
-            # Invoke actual installation function
-            try:
-                install_all_dependencies(context)
-                install_status = DependencyStatus.INSTALLED.name if has_dependencies() else DependencyStatus.ERROR.name
-            except:
-                install_status = DependencyStatus.ERROR.name
-
-
-            # Set new install status
-            props = context.scene.sprite_sheet_maker_props
-            props.dependency_status = install_status
-
-
-            # Force Redraw
-            for window in context.window_manager.windows:
-                screen = window.screen
-                for area in screen.areas:
-                    if area.type in {'VIEW_3D', 'INFO', 'PROPERTIES'}: 
-                        area.tag_redraw()
-            
-
-        # Intentionally deferred so that UI has time to update
-        bpy.app.timers.register(install_dep, first_interval=0.1)
-        
-
-        return {'FINISHED'}
 
 class SPRITESHEETMAKER_UL_ObjectList(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
@@ -331,7 +249,7 @@ class SPRITESHEETMAKER_OT_PixelateImage(Operator):
             pixelate_image(props.pixelate_image_path, param.pixelate_param, pixelated_image_path)
 
             # Notify success
-            popup(f"Pixelated image successfully at {pixelated_image_path}")
+            popup(f"Pixelated image successfully at {os.path.normpath(pixelated_image_path)}")
         
         except Exception as e:
             popup("Error occurred while pixelating image! Make sure you have passed a valid image\nCheck console for more information")
@@ -371,7 +289,7 @@ class SPRITESHEETMAKER_OT_CombineSprites(Operator):
      
 
         # Notify success
-        popup(f"Combined sprites successfully at {param.output_file_path}")
+        popup(f"Combined sprites successfully at {os.path.normpath(param.output_file_path)}")
         return {'FINISHED'}
 
 class SPRITESHEETMAKER_OT_CreateSingleSprite(bpy.types.Operator):
@@ -409,7 +327,7 @@ class SPRITESHEETMAKER_OT_CreateSingleSprite(bpy.types.Operator):
 
 
         # Notify success
-        popup(f"Created single sprite successfully at {param.output_file_path}")
+        popup(f"Created single sprite successfully at {os.path.normpath(param.output_file_path)}")
         return {'FINISHED'}
 
 class SPRITESHEETMAKER_OT_CreateSheet(Operator):
@@ -462,7 +380,7 @@ class SPRITESHEETMAKER_OT_CreateSheet(Operator):
             SPRITE_SHEET_MAKER.on_sheet_row_creating.subscribe(begin_row_progress)
             SPRITE_SHEET_MAKER.on_sheet_frame_creating.subscribe(update_frame_progress)
             sprite_sheet_path = SPRITE_SHEET_MAKER.create_sprite_sheet(param, props.output_path)
-            popup(f"Created sprite sheet successfully at {sprite_sheet_path}")
+            popup(f"Created sprite sheet successfully at {os.path.normpath(sprite_sheet_path)}")
         except Exception as e:
             popup("Error occurred while trying to create sprite sheet!\nCheck console for more information")
             print(f"[SpriteSheetMaker] Failed to assemble frames into single sprite sheet: {e} \n {traceback.format_exc()}")
@@ -481,7 +399,7 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
     bl_category = 'SpriteSheetMaker'
 
 
-    def main_panel(self, context):
+    def draw(self, context):
         layout = self.layout
         props = context.scene.sprite_sheet_maker_props
 
@@ -592,56 +510,12 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
         row.scale_y = 1.5
         row.operator("spritesheetmaker.create_sheet", text="Create Sprite Sheet", icon="RENDER_ANIMATION")
 
-    def dependencies_panel(self, context):
-        layout = self.layout
-        col = layout.column(align=True)
-        props = context.scene.sprite_sheet_maker_props
-
-
-        # Show if installation ongoing
-        if props.dependency_status == DependencyStatus.INSTALLING.name:
-            col.label(text="Installing...", icon='PREFERENCES')
-            col.label(text="(This may take a minute)")
-        else:  # Show if pending or error
-            if(props.dependency_status == DependencyStatus.ERROR.name):
-                col.label(text="Error installing", icon='ERROR')
-                col.label(text="Check console for details")
-            else:
-                col.label(text="Dependencies are NOT installed")
-            
-
-            col.separator(factor=1.0)
-
-            box = col.box()
-            box.label(text="Notes:")
-            box.label(text="1. Installs pip pillow package")
-            box.label(text="2. Will require internet access")
-            box.label(text="3. See system console for progress")
-
-            col.separator(factor=1.0)
-
-            col.operator('dependencies.install', icon='IMPORT')
-
-    def draw(self, context):
-        # Check and store if dependencies are met in cache
-        global has_dep_cache
-        if not has_dep_cache:
-            has_dep_cache = has_dependencies()
-
-
-        # Render panel based on status
-        if has_dep_cache:
-            self.main_panel(context)
-        else:
-            self.dependencies_panel(context)
-
 
 classes = (
     SpriteSheetMakerMessagePopup,
     SpriteSheetMakerObjectItem,
     SpriteSheetMakerActionItem,
     SpriteSheetMakerProperties,
-    SPRITESHEETMAKER_OT_dependencies,
     SPRITESHEETMAKER_UL_ObjectList,
     SPRITESHEETMAKER_UL_ActionsToCapture,
     SPRITESHEETMAKER_OT_AddObject,

@@ -28,13 +28,9 @@ An addon to convert your 3D animations into 2D sprite sheets with in-built toggl
 
 
 ## 🛠️ How to install?
-1. Download this repo as .zip file (you can delete `/images` folder)
+1. Download this repo as .zip file (or download from [releases](https://github.com/ManasMakde/SpriteSheetMaker/releases/))
 2. Go to _Edit -> Preferences -> Add-ons -> Install from Disk_ and select the .zip file (make sure it's enabled once installed)
-3. If it has been successfully installed you should see it appear on the side panel as such:
-
-   ![Pre sidebar screenshot](images/pre_dep_sidebar_screenshot.png)
-
-4. Make sure you have internet access (one time only) & click on the `Install Dependencies` button and wait for a few minutes, If the installation was successful you should now see the panel changed as such:
+3. If the installation was successful you should now see the panel changed as such:
 
    ![Sidebar screenshot](images/sidebar_screenshot.png)  
 
