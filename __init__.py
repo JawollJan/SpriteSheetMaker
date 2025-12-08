@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sprite Sheet Maker",
     "author": "Manas R. Makde",
-    "version": (1, 1, 0),
+    "version": (1, 5, 0),
     "description": "3D to 2D sprite sheet converter with optional pixelation"
 }
 
