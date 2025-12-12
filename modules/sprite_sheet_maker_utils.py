@@ -1,59 +1,27 @@
 import bpy
 import os
-from mathutils import Vector
-from enum import Enum
 import shutil
 import weakref
 import traceback
+import math
+from datetime import datetime
+from mathutils import Vector
+from enum import Enum
+from .combine_frames import SpriteConsistency, SpriteAlign, AssembleParam, assemble_sprite_sheet
 
 
 TEMP_FOLDER_NAME = "SpriteSheetMakerTemp"
 CAMERA_NAME = "SpriteSheetMakerCamera"
 PIXELATE_COMPOSITOR_NAME = "SpriteSheetMakerPixelate"
-SPRITE_SHEET_MAKER_BLEND_FILE = "SpriteSheetMaker.blend"
+SPRITE_SHEET_MAKER_BLEND_FILE = "./blend_files/SpriteSheetMaker.blend"
 IMAGE_INPUT_NODE = "ImageInput"
 PIXELATION_AMOUNT_NODE = "PixelationAmount"
 SHRINK_SCALE_NODE = "ShrinkScale"
 COLOR_AMOUNT_NODE = "ColorAmount"
 MIN_ALPHA_NODE = "MinAlpha"
 ALPHA_STEP_NODE = "AlphaStep"
+UNTITLED_FOLDER_NAME = "Untitled"
 
-
-class CameraDirection(Enum):
-    X = "x"
-    Y = "y"
-    Z = "z"
-    NEG_X = "-x"
-    NEG_Y = "-y"
-    NEG_Z = "-z"
-
-class ScaleInterpType(Enum):
-    NEAREST = "Nearest"
-    BILINEAR = "Bilinear"
-    BICUBIC = "Bicubic"
-    ANISOTROPIC = "Anisotropic"
-
-class PixelateParam():
-    pixelation_amount: float = 0.9
-    shrink_interp:ScaleInterpType = ScaleInterpType.NEAREST
-    color_amount: float = 50.0
-    min_alpha: float = 0.0
-    alpha_step: float = 0.25  # Ensures alpha of color is rounded down to the nearest multiple of "step" (helps reducing gradients)
-
-class SpriteParam():
-    output_file_path: str = ""
-    objects:set = set({})
-    actions = []
-    camera = None
-    camera_direction: CameraDirection = CameraDirection.NEG_X
-    camera_padding: float = 0.05
-    pixels_per_meter: int = 500
-    to_pixelate: bool = False
-    consider_armature_bones: bool = False
-    pixelate_param: PixelateParam = PixelateParam()
-    delete_temp_folder: bool = True
-    label_font_size: int = 24  # in pixels
-    frame_margin: int = 15  # in pixels
 
 class Event:
     def __init__(self):
@@ -69,87 +37,55 @@ class Event:
         for func in list(self._subscribers):
             func(*args, **kwargs)
 
-def setup_auto_camera(bounding_box: tuple[Vector, Vector] = (Vector(), Vector()), direction: CameraDirection = CameraDirection.NEG_X, pixels_per_meter: int = 500):
+class CameraDirection(Enum):
+    X = "x"
+    Y = "y"
+    Z = "z"
+    NEG_X = "-x"
+    NEG_Y = "-y"
+    NEG_Z = "-z"
 
-    # Split bounding box into min & max vertices
-    min_v, max_v = bounding_box
+class ScaleInterpType(Enum):
+    NEAREST = "Nearest"
+    BILINEAR = "Bilinear"
+    BICUBIC = "Bicubic"
+    ANISOTROPIC = "Anisotropic"
 
+class AutoCaptureParam():
+    objects:set = set({})
+    consider_armature_bones:bool = False
+    camera_direction: CameraDirection = CameraDirection.NEG_X
+    pixels_per_meter: int = 500
+    camera_padding: float = 0.05
 
-    # Calculate camera properties based on direction
-    if direction.value in [CameraDirection.X.value, CameraDirection.NEG_X.value]:
-        is_positive = direction.value == CameraDirection.X.value
-        face_x = max_v.x if is_positive else min_v.x
-        cam_pos = Vector((face_x, (min_v.y + max_v.y) / 2, (min_v.z + max_v.z) / 2))
-        cam_normal = Vector((1, 0, 0)) if is_positive else Vector((-1, 0, 0))
-        height = max_v.z - min_v.z
-        width = max_v.y - min_v.y
-        
-    elif direction.value in [CameraDirection.Y.value, CameraDirection.NEG_Y.value]:
-        is_positive = direction.value == CameraDirection.Y.value
-        face_y = max_v.y if is_positive else min_v.y
-        cam_pos = Vector(((min_v.x + max_v.x) / 2, face_y, (min_v.z + max_v.z) / 2))
-        cam_normal = Vector((0, 1, 0)) if is_positive else Vector((0, -1, 0))
-        height = max_v.z - min_v.z
-        width = max_v.x - min_v.x
-        
-    elif direction.value in [CameraDirection.Z.value, CameraDirection.NEG_Z.value]:
-        is_positive = direction.value == CameraDirection.Z.value
-        face_z = max_v.z if is_positive else min_v.z
-        cam_pos = Vector(((min_v.x + max_v.x) / 2, (min_v.y + max_v.y) / 2, face_z))
-        cam_normal = Vector((0, 0, 1)) if is_positive else Vector((0, 0, -1))
-        height = max_v.y - min_v.y
-        width = max_v.x - min_v.x
-    
-    else:
-        raise ValueError(f"Invalid direction: {direction}")
+class PixelateParam():
+    pixelation_amount: float = 0.9
+    color_amount: float = 50.0
+    min_alpha: float = 0.0
+    alpha_step: float = 0.25  # Ensures alpha of color is rounded down to the nearest multiple of "step" (helps reducing gradients)
+    shrink_interp:ScaleInterpType = ScaleInterpType.NEAREST
 
+class SpriteParam():
+    output_file_path: str = ""
+    camera = None
+    to_auto_capture = False
+    auto_capture_param = AutoCaptureParam()
+    to_pixelate: bool = False
+    pixelate_param: PixelateParam = PixelateParam()
 
-    # get existing camera
-    cam_obj = bpy.data.objects.get(CAMERA_NAME)
-    
+class StripParam():
+    label: str = ""
+    capture_items = []  # [(Object, Action, Slot), ... ]
+    manual_frames:bool = False
+    frame_start:int = 0
+    frame_end:int = 250
 
-    # If no existing camera found then create one
-    if cam_obj is None:
-        cam_data = bpy.data.cameras.new(name=CAMERA_NAME)
-        cam_obj = bpy.data.objects.new(CAMERA_NAME, cam_data)
-        bpy.context.collection.objects.link(cam_obj)
-
-
-    # Get camera data
-    cam_data = cam_obj.data
-
-
-    # Set as scene camera to render from
-    bpy.context.scene.camera = cam_obj
-
-
-    # Set properties of camera
-    cam_data.type = 'ORTHO'
-    cam_data.ortho_scale = max(width, height) 
-    cam_obj.location = cam_pos + cam_normal * 1.0
-    direction_vector = (cam_pos - cam_obj.location).normalized()
-    rot_quat = direction_vector.to_track_quat('-Z', 'Y')
-    cam_obj.rotation_mode = 'QUATERNION'
-    cam_obj.rotation_quaternion = rot_quat
-    cam_obj.rotation_mode = 'XYZ'
-    
-
-    # Set clipping
-    bbox_center_loc = (min_v + max_v) / 2
-    camera_to_bbox_dist = (cam_obj.location - bbox_center_loc).length
-    bbox_diagonal_dist =  (min_v - max_v).length
-    cam_data.clip_start = 0.1
-    cam_data.clip_end = camera_to_bbox_dist + bbox_diagonal_dist  # This is done to ensure an extra safe margin no matter the camera direction
-        
-
-    # Determine resolution
-    res_x = int(width * pixels_per_meter)
-    res_y = int(height * pixels_per_meter)
-    bpy.context.scene.render.resolution_x = res_x
-    bpy.context.scene.render.resolution_y = res_y
-    bpy.context.scene.render.resolution_percentage = 100 # Ensuring complete resolution
-
-    return cam_obj
+class SpriteSheetParam():
+    animation_strips: list[StripParam] = [] 
+    output_file_path: str = ""
+    delete_temp_folder: bool = True
+    sprite_param : SpriteParam = SpriteParam()
+    assemble_param: AssembleParam = AssembleParam()
 
 def get_bounding_box(objects, ignore_armatures = True):
 
@@ -162,6 +98,8 @@ def get_bounding_box(objects, ignore_armatures = True):
     min_corner = Vector((float('inf'), float('inf'), float('inf')))
     max_corner = Vector((float('-inf'), float('-inf'), float('-inf')))
     for obj in objects:
+
+        # Skip armature
         if obj.type == 'ARMATURE' and ignore_armatures:
             continue
         
@@ -213,6 +151,101 @@ def extend_bounding_box(bounding_box: tuple[Vector, Vector], extend_by):
 
     return extended_min_corner, extended_max_corner
 
+def setup_auto_camera(param: AutoCaptureParam, existing_camera = None):
+
+    # Get & extend bounding box
+    bbox = get_bounding_box(param.objects, not param.consider_armature_bones)
+    bbox_extended = extend_bounding_box(bbox, param.camera_padding)
+
+
+    # Split bounding box into min & max vertices
+    min_v, max_v = bbox_extended
+
+
+    # Calculate camera properties based on direction
+    direction = param.camera_direction
+    if direction.value in [CameraDirection.X.value, CameraDirection.NEG_X.value]:
+        is_positive = direction.value == CameraDirection.X.value
+        face_x = max_v.x if is_positive else min_v.x
+        cam_pos = Vector((face_x, (min_v.y + max_v.y) / 2, (min_v.z + max_v.z) / 2))
+        cam_normal = Vector((1, 0, 0)) if is_positive else Vector((-1, 0, 0))
+        height = max_v.z - min_v.z
+        width = max_v.y - min_v.y
+        
+    elif direction.value in [CameraDirection.Y.value, CameraDirection.NEG_Y.value]:
+        is_positive = direction.value == CameraDirection.Y.value
+        face_y = max_v.y if is_positive else min_v.y
+        cam_pos = Vector(((min_v.x + max_v.x) / 2, face_y, (min_v.z + max_v.z) / 2))
+        cam_normal = Vector((0, 1, 0)) if is_positive else Vector((0, -1, 0))
+        height = max_v.z - min_v.z
+        width = max_v.x - min_v.x
+        
+    elif direction.value in [CameraDirection.Z.value, CameraDirection.NEG_Z.value]:
+        is_positive = direction.value == CameraDirection.Z.value
+        face_z = max_v.z if is_positive else min_v.z
+        cam_pos = Vector(((min_v.x + max_v.x) / 2, (min_v.y + max_v.y) / 2, face_z))
+        cam_normal = Vector((0, 0, 1)) if is_positive else Vector((0, 0, -1))
+        height = max_v.y - min_v.y
+        width = max_v.x - min_v.x
+    
+    else:
+        raise ValueError(f"Invalid direction: {direction}")
+
+
+    # Get existing camera if camera not given
+    cam_obj = existing_camera
+    if cam_obj is None:
+        cam_obj = bpy.data.objects.get(CAMERA_NAME)
+    
+
+    # If no existing camera found then create one
+    if cam_obj is None:
+        cam_data = bpy.data.cameras.new(name=CAMERA_NAME)
+        cam_obj = bpy.data.objects.new(CAMERA_NAME, cam_data)
+        bpy.context.collection.objects.link(cam_obj)
+
+
+    # Get camera data
+    cam_data = cam_obj.data
+
+
+    # Set as scene camera to render from
+    # bpy.context.scene.camera = cam_obj
+
+
+    # Set properties of camera
+    cam_data.type = 'ORTHO'
+    cam_data.ortho_scale = max(width, height) 
+    cam_obj.location = cam_pos + cam_normal * 1.0
+    direction_vector = (cam_pos - cam_obj.location).normalized()
+    rot_quat = direction_vector.to_track_quat('-Z', 'Y')
+    cam_obj.rotation_mode = 'QUATERNION'
+    cam_obj.rotation_quaternion = rot_quat
+    cam_obj.rotation_mode = 'XYZ'
+    
+
+    # Set clipping
+    bbox_center_loc = (min_v + max_v) / 2
+    camera_to_bbox_dist = (cam_obj.location - bbox_center_loc).length
+    bbox_diagonal_dist =  (min_v - max_v).length
+    cam_data.clip_start = 0.1
+    cam_data.clip_end = camera_to_bbox_dist + bbox_diagonal_dist  # This is done to ensure an extra safe margin no matter the camera direction
+        
+
+    # Determine resolution
+    res_x = int(width * param.pixels_per_meter)
+    res_y = int(height * param.pixels_per_meter)
+    bpy.context.scene.render.resolution_x = res_x
+    bpy.context.scene.render.resolution_y = res_y
+    bpy.context.scene.render.resolution_percentage = 100 # Ensuring complete resolution
+
+    return cam_obj
+
+def delete_auto_camera():
+    cam_obj = bpy.data.objects.get(CAMERA_NAME)
+    if cam_obj is not None:
+        bpy.data.objects.remove(cam_obj, do_unlink=True) 
+
 def render(output_file_path: str):
 
     # Set Output File Location
@@ -233,23 +266,23 @@ def pixelate_image(image_path: str, param: PixelateParam, output_image_path = No
 
         # Check if blend file exists
         if not os.path.exists(blend_file_path):
-            print(f"[SpriteSheetMaker] Blend file for importing compositor not found: {blend_file_path}")
+            print(f"[SpriteSheetMaker {datetime.now()}] Blend file for importing compositor not found: {blend_file_path}")
             return
         
         # Append the node tree from the external blend file
         with bpy.data.libraries.load(blend_file_path, link=False) as (data_from, data_to):
             if PIXELATE_COMPOSITOR_NAME in data_from.node_groups:
-                print(f"[SpriteSheetMaker] Importing node group '{PIXELATE_COMPOSITOR_NAME}' from '{blend_file_path}'")
+                print(f"[SpriteSheetMaker {datetime.now()}] Importing node group '{PIXELATE_COMPOSITOR_NAME}' from '{blend_file_path}'")
                 data_to.node_groups = [PIXELATE_COMPOSITOR_NAME]
             else:
-                print(f"[SpriteSheetMaker] Node group '{PIXELATE_COMPOSITOR_NAME}' not found in {blend_file_path}")
+                print(f"[SpriteSheetMaker {datetime.now()}] Node group '{PIXELATE_COMPOSITOR_NAME}' not found in {blend_file_path}")
                 return
     
 
     # Get compositor & make sure it's a compositor node tree
     pixelate_tree = bpy.data.node_groups[PIXELATE_COMPOSITOR_NAME]
     if pixelate_tree.bl_idname != "CompositorNodeTree":
-        print(f"[SpriteSheetMaker] '{PIXELATE_COMPOSITOR_NAME}' is not a CompositorNodeTree!")
+        print(f"[SpriteSheetMaker {datetime.now()}] '{PIXELATE_COMPOSITOR_NAME}' is not a CompositorNodeTree!")
         return
     
 
@@ -301,7 +334,7 @@ def pixelate_image(image_path: str, param: PixelateParam, output_image_path = No
 
 
     # Render image
-    print(f"[SpriteSheetMaker] Rendering pixelated sprite")
+    print(f"[SpriteSheetMaker {datetime.now()}] Rendering pixelated sprite")
     width, height = image.size
     bpy.context.scene.render.resolution_x = int(width * (1.0 - param.pixelation_amount))  # Shrink resolution before rendering
     bpy.context.scene.render.resolution_y = int(height * (1.0 - param.pixelation_amount))
@@ -317,86 +350,32 @@ def create_folder(at_path, folder_name):
 
     # Make sure the name is safe for folder creation
     folder_name = bpy.path.clean_name(folder_name)
-
-    # complete folder path
     folder_path = os.path.join(at_path, folder_name)
 
-    # If folder exists, add numeric suffix
-    if os.path.exists(folder_path):
-        counter = 1
-        while True:
-            new_name = f"{folder_name}_{counter}"
-            new_path = os.path.join(at_path, new_name)
-            if not os.path.exists(new_path):
-                folder_path = new_path
-                break
-            counter += 1
+
+    # If folder exists then add numeric suffix
+    counter = 1
+    while os.path.exists(folder_path) and counter < 10000:
+        new_name = f"{folder_name}_{counter}"
+        folder_path = os.path.join(at_path, new_name)
+        counter += 1
+
 
     # Create folder
     os.makedirs(folder_path)
 
     return folder_path
 
-def objects_linked_to_action(action):
-    linked_objects = set()
-    
-
-    # Return if action does not exist
-    if action is None:
-        return linked_objects
-
-
-    # Iterate through all objects in the scene
-    for obj in bpy.data.objects:
-        # Skip if object does not have animation data
-        if not obj.animation_data:
-            continue
-            
-        
-        # Check active action
-        if obj.animation_data.action == action:
-            linked_objects.add(obj)
-            continue
-
-
-        # Return if object does not have nla tracks
-        if not obj.animation_data.nla_tracks:
-            continue
-
-
-        # Check all NLA tracks
-        for track in obj.animation_data.nla_tracks:
-
-            # Check all strips
-            found_object = False
-            for strip in track.strips:
-                if strip.action == action:
-                    linked_objects.add(obj)
-                    found_object = True
-                    break
-            
-            # Break from loop if already found
-            if found_object:
-                break
-        
-
-        # Check Armature (older workflows)
-        if obj.type == 'ARMATURE' and obj.data.animation_data and obj.data.animation_data.action == action:
-            linked_objects.add(obj)
-
-
-    return linked_objects
-
 class SpriteSheetMaker():
     def __init__(self):
         self.on_sprite_creating = Event()  # param
         self.on_sprite_created = Event()   # param
-        self.on_sheet_row_creating = Event()  # action_name, total_frames
-        self.on_sheet_row_created = Event()  # action_name, total_frames
-        self.on_sheet_frame_creating = Event()  # action_name, frame
-        self.on_sheet_frame_created = Event()   # action_name, frame
+        self.on_sheet_row_creating = Event()  # strip_label, total_frames
+        self.on_sheet_row_created = Event()  # strip_label, total_frames
+        self.on_sheet_frame_creating = Event()  # strip_label, frame
+        self.on_sheet_frame_created = Event()   # strip_label, frame
     
-    def create_sprite(self, param: SpriteParam, delete_auto_camera = True):
+    def create_sprite(self, param: SpriteParam):
 
         self.on_sprite_creating.broadcast(param)
 
@@ -412,12 +391,10 @@ class SpriteSheetMaker():
 
 
         # Setup camera according to bounding box & other parameters
-        print(f"[SpriteSheetMaker] Setting up camera to capture all objects")
+        print(f"[SpriteSheetMaker {datetime.now()}] Setting up camera to capture all objects")
         camera = param.camera
-        if camera is None:
-            bbox = get_bounding_box(param.objects, not param.consider_armature_bones)
-            bbox = extend_bounding_box(bbox, param.camera_padding)
-            camera = setup_auto_camera(bbox, param.camera_direction, param.pixels_per_meter)
+        if param.to_auto_capture:
+            camera = setup_auto_camera(param.auto_capture_param, param.camera)
 
 
         # Make sure camera is being used to render
@@ -425,21 +402,19 @@ class SpriteSheetMaker():
 
         
         # Render image to folder
-        print(f"[SpriteSheetMaker] Rendering sprite")
+        print(f"[SpriteSheetMaker {datetime.now()}] Rendering sprite")
         render(param.output_file_path)
 
         
         # Pixelate Rendered image
         if param.to_pixelate:
-            print(f"[SpriteSheetMaker] Pixelating sprite")
+            print(f"[SpriteSheetMaker {datetime.now()}] Pixelating sprite")
             pixelate_image(param.output_file_path, param.pixelate_param)
 
 
         # Delete camera after render
-        if(delete_auto_camera):
-            cam_obj = bpy.data.objects.get(CAMERA_NAME)
-            if cam_obj is not None:
-                bpy.data.objects.remove(cam_obj, do_unlink=True) 
+        if(param.to_auto_capture and param.camera is None):
+            delete_auto_camera()
         
 
         # Reset old resolutions 
@@ -448,60 +423,107 @@ class SpriteSheetMaker():
 
 
         self.on_sprite_created.broadcast(param)
+    
+    def create_sprite_sheet(self, param: SpriteSheetParam):
         
-    def create_sprite_sheet(self, param: SpriteParam, output_folder_path: str):
-        # Create folder
-        print(f"[SpriteSheetMaker] Creating temp folder '{TEMP_FOLDER_NAME}'")
-        temp_dir = create_folder(output_folder_path, TEMP_FOLDER_NAME)
+        # Create temp folder
+        print(f"[SpriteSheetMaker {datetime.now()}] Creating temp folder '{TEMP_FOLDER_NAME}'")
+        temp_dir = create_folder(os.path.dirname(param.output_file_path), TEMP_FOLDER_NAME)
 
 
-        # Store original sheet path
-        sprite_sheet_path = param.output_file_path
+        # Create camera
+        if(param.sprite_param.camera is None):
+            param.sprite_param.camera = setup_auto_camera(param.sprite_param.auto_capture_param, param.sprite_param.camera)
 
 
         # Iterate through actions and capture render for each frame (Each action should have it's own folder (in order) & image names should be 1, 2, 3 for each frame respectively)
-        for i, action in enumerate(param.actions):
+        for i, strip in enumerate(param.animation_strips):
 
-            # Create folder for action & Notify
-            folder_name = f"{i}_{action.name}"
-            print(f"[SpriteSheetMaker] Creating folder {folder_name}")
+            # Calculate frame range
+            frame_start = float('inf')
+            frame_end = float('-inf')
+            if(strip.manual_frames):
+                frame_start = strip.frame_start
+                frame_end = strip.frame_end
+            else:
+                for item in strip.capture_items:
+                    obj, action, slot = item
+                    if(action != None):
+                        frame_start = min(frame_start, action.frame_range[0])
+                        frame_end = max(frame_end, action.frame_range[1])
+
+
+            # Convert to int and make sure they are never infinity
+            frame_start = 0 if math.isinf(frame_start) else int(frame_start)
+            frame_end = 0 if math.isinf(frame_end) else int(frame_end)
+
+
+            # Create folder for this strip
+            clean_label = bpy.path.clean_name(strip.label.strip())
+            folder_name = f"{i}_{clean_label if clean_label !='' else UNTITLED_FOLDER_NAME}"
+            print(f"[SpriteSheetMaker {datetime.now()}] Creating folder {folder_name}")
             action_dir = create_folder(temp_dir, folder_name)
-            self.on_sheet_row_creating.broadcast(action.name, int(action.frame_range[1]))
+            self.on_sheet_row_creating.broadcast(strip.label, frame_end)
 
 
-            # Assign action to all linked objects
-            linked_objects = objects_linked_to_action(action)
-            for obj in linked_objects:
-                anim_data = obj.animation_data
-                anim_data.action = action
+            # Assign action to all objects
+            for (obj, action, slot) in strip.capture_items:
+
+                # Skip if object is invalid
+                if obj == None:
+                    continue
+                
+                # Skip if object doesn't have animation data
+                if not hasattr(obj, "animation_data"):
+                    continue
+                
+                # Skip if object doesn't have action
+                if not hasattr(obj.animation_data, "action"):
+                    continue
+                
+                # Assign action
+                obj.animation_data.action = action
+                
+                # Skip if no slot
+                if not hasattr(obj.animation_data, "action_slot"):
+                    continue
+                
+                # Assign user provided slot
+                slot_name = f"OB{slot}"
+                if slot != "" and action != None and (slot_name in action.slots):
+                    obj.animation_data.action_slot = action.slots[slot_name]
+
+                # Assign default slot
+                elif hasattr(obj.animation_data, "action_suitable_slots") and len(obj.animation_data.action_suitable_slots) > 0:
+                    obj.animation_data.action_slot = obj.animation_data.action_suitable_slots[0]
 
 
             # Iterate through all frames
-            frame_start, frame_end = int(action.frame_range[0]), int(action.frame_range[1])
             for frame in range(frame_start, frame_end + 1):
 
                 # Notify starting
-                self.on_sheet_frame_creating.broadcast(action.name, frame)
-                print(f"[SpriteSheetMaker] Capturing action '{action.name}' at frame {frame}")
+                self.on_sheet_frame_creating.broadcast(strip.label, frame)
+                print(f"[SpriteSheetMaker {datetime.now()}] Capturing strip '{strip.label}' at frame {frame}")
 
                 # Set frame
                 bpy.context.scene.frame_set(frame)
 
                 # Render a single sprite
-                param.output_file_path = f"{action_dir}/{frame}.{bpy.context.scene.render.image_settings.file_format.lower()}"
-                self.create_sprite(param, False)
+                param.sprite_param.output_file_path = f"{action_dir}/{frame}.{bpy.context.scene.render.image_settings.file_format.lower()}"
+                self.create_sprite(param.sprite_param)
 
                 # Notify frame completed
-                self.on_sheet_frame_created.broadcast(action.name, frame)
+                self.on_sheet_frame_created.broadcast(strip.label, frame)
             
             
             # Notify action completed
-            self.on_sheet_row_created.broadcast(action.name, int(action.frame_range[1]))
+            self.on_sheet_row_created.broadcast(strip.label, frame_end)
 
 
         # Combine images together into single file and paste in output
-        from .combine_frames import assemble_sprite_sheet
-        assemble_sprite_sheet(temp_dir, sprite_sheet_path, param.label_font_size, param.frame_margin)
+        param.assemble_param.input_folder_path = temp_dir
+        param.assemble_param.output_file_path = param.output_file_path
+        assemble_sprite_sheet(param.assemble_param)
 
 
         # Delete temp folder
@@ -510,9 +532,7 @@ class SpriteSheetMaker():
 
 
         # Delete camera after use
-        cam_obj = bpy.data.objects.get(CAMERA_NAME)
-        if cam_obj is not None:
-            bpy.data.objects.remove(cam_obj, do_unlink=True) 
+        delete_auto_camera()
 
 
-        return sprite_sheet_path
+        return True
