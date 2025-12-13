@@ -13,7 +13,7 @@ from .combine_frames import SpriteConsistency, SpriteAlign, AssembleParam, assem
 TEMP_FOLDER_NAME = "SpriteSheetMakerTemp"
 CAMERA_NAME = "SpriteSheetMakerCamera"
 PIXELATE_COMPOSITOR_NAME = "SpriteSheetMakerPixelate"
-SPRITE_SHEET_MAKER_BLEND_FILE = "./blend_files/SpriteSheetMaker.blend"
+SPRITE_SHEET_MAKER_BLEND_FILE = "../blend_files/SpriteSheetMaker.blend"
 IMAGE_INPUT_NODE = "ImageInput"
 PIXELATION_AMOUNT_NODE = "PixelationAmount"
 SHRINK_SCALE_NODE = "ShrinkScale"
