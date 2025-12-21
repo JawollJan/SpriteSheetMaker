@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Sprite Sheet Maker",
     "author": "Manas R. Makde",
-    "version": (5, 0, 0),
+    "version": (5, 1, 0),
     "description": "3D to 2D sprite sheet converter with optional pixelation"
 }
 
@@ -10,7 +10,7 @@ import bpy
 import os
 from datetime import datetime
 from .modules.sprite_sheet_maker_utils import *
-from .modules.combine_frames import SpriteAlign, assemble_sprite_sheet
+from .modules.combine_frames import *
 from bpy.types import Panel, Operator, PropertyGroup, UIList
 from bpy.props import (
     StringProperty,
@@ -19,7 +19,7 @@ from bpy.props import (
     PointerProperty,
     CollectionProperty,
     IntProperty,
-    EnumProperty,
+    EnumProperty
 )
 
 
@@ -27,8 +27,10 @@ from bpy.props import (
 SPRITE_SHEET_MAKER = SpriteSheetMaker()
 SINGLE_SPRITE_NAME = "sprite"
 SPRITE_SHEET_NAME = "sprite_sheet"
+DEFAULT_OUTPUT_FOLDER_NAME = "SpriteSheetMaker"
 PIXELATE_TEST_IMAGE_POSTFIX = "pixelated"
 UNTITLED_STRIP_NAME = "<Untitled>"
+UNTITLED_LABEL_TEXT = "Untitled"
 
 
 # Classes
@@ -74,16 +76,25 @@ class SpriteSheetMakerStripInfo(bpy.types.PropertyGroup):
     frame_end: IntProperty(name="End", default=250, min=-1048574, max=1048574)
 
     def update_label_from_action(self):
-        if self.label.strip() != "":
-            return
+        # Iterate through all items
+        action_count = 0
+        new_label = ""
         for item in self.capture_items:
             if item.action:
-                self.label = item.action.name
+                new_label = item.action.name
+                action_count +=1
+            
+            if action_count > 1:
                 break
+        
+
+        # Assign new label if only 1 action or empty label
+        if(action_count <= 1 or self.label.strip() == ""):
+            self.label = new_label
 
 class SpriteSheetMakerProperties(PropertyGroup):
     # Camera settings
-    camera_object: PointerProperty(name="Camera Object", type=bpy.types.Object, poll=lambda self, obj: obj.type == 'CAMERA')
+    custom_camera: PointerProperty(name="Custom Camera", type=bpy.types.Object, poll=lambda self, obj: obj.type == 'CAMERA')
     to_auto_capture: BoolProperty(name="To Auto Capture", default=True)
     camera_direction: EnumProperty(
         name="Camera Direction",
@@ -101,23 +112,12 @@ class SpriteSheetMakerProperties(PropertyGroup):
     camera_padding: FloatProperty(name="Camera Padding", unit='LENGTH', default=0.05, min=0.0, soft_max=10.0)
     consider_armature_bones: BoolProperty(default=False)
 
-
     # Pixelation settings
     to_pixelate: BoolProperty(name="To Pixelate", default=False)
     pixelation_amount: FloatProperty(name="Pixelation Amount", default=0.9, precision=5, step=0.001, min=0.0, max=1.0)
-    shrink_interp: EnumProperty(
-        name="Shrink Interpolation",
-        items=[
-            (ScaleInterpType.NEAREST.value, "Nearest", "Nearest"),
-            (ScaleInterpType.BILINEAR.value, "Bilinear", "Bilinear"),
-            (ScaleInterpType.BICUBIC.value, "Bicubic", "Bicubic"),
-            (ScaleInterpType.ANISOTROPIC.value, "Anisotropic", "Anisotropic")
-        ],
-        default=ScaleInterpType.NEAREST.value
-    )
     color_amount: FloatProperty(name="Pixelation Color Amount", default=50.0, min=0.0, soft_max=1000)
-    min_alpha: FloatProperty(name="Min Alpha", default=0.0, min=0.0, max=1.0)
-    alpha_step: FloatProperty(name="Alpha Step", default=0.001, min=0.0, max=1.0)
+    min_alpha: FloatProperty(name="Min Alpha", default=0.0, min=0.0, max=1.1)
+    alpha_step: FloatProperty(name="Alpha Step", default=0.0, min=0.0, max=1.1)
     pixelate_image_path: StringProperty(
         name="Pixelate Image Path",
         subtype="FILE_PATH"
@@ -125,7 +125,12 @@ class SpriteSheetMakerProperties(PropertyGroup):
 
     # Output settings
     label_font_size: IntProperty(name="Label Font Size", default=24, min=0, soft_max=1000)
-    sprite_margin: IntProperty(name="Sprite Margin", default=15, min=0, soft_max=1000)
+    surrounding_margin_top: IntProperty(name="Surrounding Margin Top", default=15, min=0, soft_max=1000)
+    surrounding_margin_right: IntProperty(name="Surrounding Margin Right", default=15, min=0, soft_max=1000)
+    surrounding_margin_bottom: IntProperty(name="Surrounding Margin Bottom", default=15, min=0, soft_max=1000)
+    surrounding_margin_left: IntProperty(name="Surrounding Margin Left", default=15, min=0, soft_max=1000)
+    label_margin: IntProperty(name="Label Margin", default=15, min=0, soft_max=1000)
+    image_margin: IntProperty(name="Image Margin", default=15, min=0, soft_max=1000)
     sprite_consistency: EnumProperty(
         name="Sprite Align",
         items=[
@@ -149,6 +154,15 @@ class SpriteSheetMakerProperties(PropertyGroup):
             (SpriteAlign.BOTTOM_RIGHT.value, "Bottom Right", "Align sprite to vertical bottom & horizontal right"),
         ],
         default=SpriteAlign.BOTTOM_CENTER.value
+    )
+    combine_mode: EnumProperty(
+        name="Combine Mode",
+        items=[
+            (CombineMode.IMAGES.value, "Images", "Render out individual images"),
+            (CombineMode.STRIPS.value, "Strips", "Render out separate strips for each action"),
+            (CombineMode.SHEET.value, "Sheet", "Render out a single sprite sheet"),
+        ],
+        default=CombineMode.SHEET.value
     )
     delete_temp_folder: BoolProperty(name="Delete Temp Folder", default=True)
     output_folder: StringProperty(
@@ -177,9 +191,56 @@ class SPRITESHEETMAKER_UL_CaptureItems(bpy.types.UIList):
         col_action.prop(item, "action", text="")
         col_slot.prop(item, "slot", text="Slot")
 
+class SPRITESHEETMAKER_OT_duplicate_strip(bpy.types.Operator):
+    bl_idname = "spritesheetmaker.duplicate_strip"
+    bl_label = "Duplicate Strip"
+    bl_description = "Duplicate the selected animation strip"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        # Get essentials
+        scene = context.scene
+        strips = scene.animation_strips
+        idx = scene.strip_index
+
+
+        # Return if no strips exist
+        if idx < 0 or idx >= len(strips):
+            return bpy.ops.spritesheetmaker.add_strip()
+
+
+        # Store original strip
+        original_strip = strips[idx]
+
+
+        # Create new strip
+        new_strip = strips.add()
+        new_strip.label = original_strip.label
+        new_strip.capture_items.clear()
+        for item in original_strip.capture_items:
+            dst_item = new_strip.capture_items.add()
+            dst_item.object = item.object
+            dst_item.action = item.action
+            dst_item.slot = item.slot
+        new_strip.manual_frames = original_strip.manual_frames
+        new_strip.frame_start = original_strip.frame_start
+        new_strip.frame_end = original_strip.frame_end
+
+
+        # Set index of strip
+        new_index = len(strips) - 1
+        target_index = idx + 1
+        strips.move(new_index, target_index)
+        scene.strip_index = target_index
+
+
+        return {'FINISHED'}
+
 class SPRITESHEETMAKER_OT_add_strip(bpy.types.Operator):
     bl_idname = "spritesheetmaker.add_strip"
     bl_label = "Add Strip"
+    bl_description = "Add new animation strip"
+    bl_options = {'UNDO'}
 
     def execute(self, context):
         scene = context.scene
@@ -192,6 +253,8 @@ class SPRITESHEETMAKER_OT_add_strip(bpy.types.Operator):
 class SPRITESHEETMAKER_OT_remove_strip(bpy.types.Operator):
     bl_idname = "spritesheetmaker.remove_strip"
     bl_label = "Remove Strip"
+    bl_description = "Delete animation strip"
+    bl_options = {'UNDO'}
 
     def execute(self, context):
         scene = context.scene
@@ -205,6 +268,7 @@ class SPRITESHEETMAKER_OT_move_strip(bpy.types.Operator):
     bl_idname = "spritesheetmaker.move_strip"
     bl_label = "Move Strip"
     bl_description = "Move animation strip up or down"
+    bl_options = {'UNDO'}
 
     direction: EnumProperty(
         items=[
@@ -231,6 +295,8 @@ class SPRITESHEETMAKER_OT_move_strip(bpy.types.Operator):
 class SPRITESHEETMAKER_OT_add_capture_item(bpy.types.Operator):
     bl_idname = "spritesheetmaker.add_capture_item"
     bl_label = "Add Capture Item"
+    bl_description = "Add capture item"
+    bl_options = {'UNDO'}
 
     def execute(self, context):
         scene = context.scene
@@ -246,6 +312,8 @@ class SPRITESHEETMAKER_OT_add_capture_item(bpy.types.Operator):
 class SPRITESHEETMAKER_OT_remove_capture_item(bpy.types.Operator):
     bl_idname = "spritesheetmaker.remove_capture_item"
     bl_label = "Remove Capture Item"
+    bl_description = "Remove capture item"
+    bl_options = {'UNDO'}
 
     def execute(self, context):
         scene = context.scene
@@ -261,6 +329,34 @@ class SPRITESHEETMAKER_OT_remove_capture_item(bpy.types.Operator):
 
 
 # Primary Buttons
+class SPRITESHEETMAKER_OT_CreateAutoCamera(Operator):
+    bl_idname = "spritesheetmaker.create_auto_camera"
+    bl_label = "Create Auto Camera"
+    bl_description = "Create camera from given auto capture parameters"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+
+        # Get assigned custom camera
+        props = bpy.context.scene.sprite_sheet_maker_props
+        cam_obj = props.custom_camera
+
+
+        # Create new camera if no custom camera assigned
+        if(cam_obj is None):
+            cam_name = f"New{CAMERA_NAME}"
+            cam_data = bpy.data.cameras.new(name=cam_name)
+            cam_obj = bpy.data.objects.new(cam_name, cam_data)
+            bpy.context.collection.objects.link(cam_obj)
+
+
+        # Set it up based on auto parameters
+        param = auto_capture_param_from_props()
+        setup_auto_camera(param, cam_obj)
+
+
+        return {'FINISHED'}
+
 class SPRITESHEETMAKER_OT_PixelateImage(Operator):
     bl_idname = "spritesheetmaker.pixelate_image"
     bl_label = "Pixelate Image"
@@ -285,13 +381,15 @@ class SPRITESHEETMAKER_OT_PixelateImage(Operator):
             param = pixelate_param_from_props()
 
             # Pixelate the image
-            pixelate_image(props.pixelate_image_path, param, get_pixelated_img_path())
+            pixelated_output_path = get_pixelated_img_path()
+            pixelate_images({ props.pixelate_image_path:pixelated_output_path }, param)
 
             # Notify success
-            popup(f"Pixelated image successfully at {os.path.normpath(pixelated_image_path)}")
+            popup(f"Pixelated image successfully at {pixelated_output_path}")
         except Exception as e:
-            popup("Error occurred while pixelating image! Make sure you have passed a valid image\nCheck console for more information")
-            print(f"[SpriteSheetMaker {datetime.now()}] Failed to pixelate image: {e} \n {traceback.format_exc()}")
+            error_msg = f"Error occurred while pixelating image! Make sure you have passed a valid image \n {e} \n {traceback.format_exc()}"
+            popup(error_msg)
+            print(f"[SpriteSheetMaker {datetime.now()}] {error_msg}")
      
 
         return {'FINISHED'}
@@ -317,15 +415,16 @@ class SPRITESHEETMAKER_OT_CombineSprites(Operator):
         # Combine images together into single file and paste in output
         try:
             param = assemble_param_from_props()
-            assemble_sprite_sheet(param)
+            assemble_images(param)
         except Exception as e:
-            popup("Error occurred while combining sprites! Make sure your folder follows this structure:\nMyFolder\n   - 1_Walking\n      - 1.png\n      - 2.png\n   - 2_Attacking\n      - 1.png\n      - 2.png\nCheck console for more information")
-            print(f"[SpriteSheetMaker {datetime.now()}] Failed to assemble frames into single sprite sheet: {e} \n {traceback.format_exc()}")
+            error_msg = f"Error occurred while combining sprites!\nMake sure the provided 'Output Folder' follows this structure:\nMyFolder\n   - 1_Walking\n      - 1.png\n      - 2.png\n   - 2_Attacking\n      - 1.png\n      - 2.png\n\nFailed to assemble frames into single sprite sheet: {e} \n {traceback.format_exc()}"
+            popup(error_msg)
+            print(f"[SpriteSheetMaker {datetime.now()}] {error_msg}")
             return {'FINISHED'}
      
 
         # Notify success
-        popup(f"Combined sprites successfully at {os.path.normpath(param.output_file_path)}")
+        popup(f"Combined sprites successfully at {os.path.normpath(param.output_path)}")
         return {'FINISHED'}
 
 class SPRITESHEETMAKER_OT_CreateSingleSprite(bpy.types.Operator):
@@ -348,8 +447,8 @@ class SPRITESHEETMAKER_OT_CreateSingleSprite(bpy.types.Operator):
 
             
         # Return if manual cameras has not been set
-        if(not props.to_auto_capture and ((props.camera_object is None) or (props.camera_object.type != 'CAMERA'))):
-            popup("Either set 'Camera Object' or enable 'To Auto Capture' first!", "CANCEL")
+        if(not props.to_auto_capture and ((props.custom_camera is None) or (props.custom_camera.type != 'CAMERA'))):
+            popup("Either set 'Custom Camera' or enable 'To Auto Capture' first!", "CANCEL")
             return {'FINISHED'}
 
 
@@ -361,13 +460,20 @@ class SPRITESHEETMAKER_OT_CreateSingleSprite(bpy.types.Operator):
 
         # Create single sprite
         try:
+            # Create sprite
             param = sprite_param_from_props()
             SPRITE_SHEET_MAKER.create_sprite(param)
+
+            # Add image and margin
+            assemble_param = assemble_param_from_props()
+            add_label_to_image(param.output_file_path, get_label_text(), assemble_param)
+
             popup(f"Created single sprite successfully at {os.path.normpath(param.output_file_path)}")
             return {'FINISHED'}
         except Exception as e:
-            popup("Error occurred while creating sprite! Check console for more information")
-            print(f"[SpriteSheetMaker {datetime.now()}] Failed to create sprite: {e} \n {traceback.format_exc()}")
+            error_msg = f"Error occurred while creating single sprite!\n {e} \n {traceback.format_exc()}"
+            popup(error_msg)
+            print(f"[SpriteSheetMaker {datetime.now()}] {error_msg}")
             return {'FINISHED'}
 
 class SPRITESHEETMAKER_OT_CreateSheet(Operator):
@@ -419,8 +525,8 @@ class SPRITESHEETMAKER_OT_CreateSheet(Operator):
             
         
         # Return if manual cameras has not been set
-        if(not props.to_auto_capture and ((props.camera_object is None) or (props.camera_object.type != 'CAMERA'))):
-            popup("Either set 'Camera Object' or enable 'To Auto Capture' first!", "CANCEL")
+        if(not props.to_auto_capture and ((props.custom_camera is None) or (props.custom_camera.type != 'CAMERA'))):
+            popup("Either set 'Custom Camera' or enable 'To Auto Capture' first!", "CANCEL")
             return {'FINISHED'}
 
 
@@ -447,10 +553,11 @@ class SPRITESHEETMAKER_OT_CreateSheet(Operator):
 
             param = sprite_sheet_param_from_props()
             SPRITE_SHEET_MAKER.create_sprite_sheet(param)
-            popup(f"Created sprite sheet successfully at {os.path.normpath(param.output_file_path)}")
+            popup(f"Created successfully at {os.path.normpath(param.assemble_param.output_path)}")
         except Exception as e:
-            popup("Error occurred while trying to create sprite sheet!\nCheck console for more information")
-            print(f"[SpriteSheetMaker {datetime.now()}] Failed to assemble frames into single sprite sheet: {e} \n {traceback.format_exc()}")
+            error_msg = f"Error occurred while trying to create sprite sheet!\n{e}\n{traceback.format_exc()}"
+            popup(error_msg)
+            print(f"[SpriteSheetMaker {datetime.now()}] {error_msg}")
             return {'FINISHED'}
     
 
@@ -485,13 +592,15 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
             "animation_strips",
             scene,
             "strip_index",
-            rows=3,
-            maxrows=3
+            rows=4,
+            maxrows=4
         )
 
 
         # Strips Add & Remove buttons
         ops = row.column(align=True)
+        ops.operator("spritesheetmaker.duplicate_strip", icon='DUPLICATE', text='')
+        ops.separator()
         ops.operator('spritesheetmaker.add_strip', icon='ADD', text='')
         ops.operator('spritesheetmaker.remove_strip', icon='REMOVE', text='')
 
@@ -558,7 +667,7 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
             # Custom Camera
             split = row.split(factor=0.55)
             split.label(text="Custom Camera")
-            split.prop(props, "camera_object", text="")
+            split.prop(props, "custom_camera", text="")
             
             # To Auto Capture
             box.prop(props, "to_auto_capture")
@@ -580,6 +689,12 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
                 # Consider Armature Bones
                 box.prop(props, "consider_armature_bones", text="Consider Armature Bones")
 
+                # Create Auto Camera Button
+                box.separator(factor=0.25)
+                row = box.row()
+                button_text = "Create Auto Camera" if props.custom_camera == None else "Modify Custom Camera"
+                row.operator("spritesheetmaker.create_auto_camera", text=button_text, icon="OUTLINER_OB_CAMERA")
+                
 
         # Pixelation Settings (Collapsible)
         box = layout.box()
@@ -601,12 +716,6 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
 
                 # Alpha Step
                 box.prop(props, "alpha_step", text="Alpha Step")
-                
-                # Shrink Interp
-                row = box.row()
-                split = row.split(factor=0.40)
-                split.label(text="Shrink Interp")
-                split.prop(props, "shrink_interp", text="")
 
                 # Test Image
                 row = box.row()
@@ -628,8 +737,19 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
             # Label Font Size
             box.prop(props, "label_font_size", text="Label Font Size")
 
-            # Sprite Margin
-            box.prop(props, "sprite_margin", text="Sprite Margin")
+            # Surrounding Margins
+            box.label(text="Surrounding Margins")
+            row = box.row(align=True)  # Create a row layout
+            row.prop(props, "surrounding_margin_top", text="Top")
+            row.prop(props, "surrounding_margin_right", text="Right")
+            row.prop(props, "surrounding_margin_bottom", text="Bottom")
+            row.prop(props, "surrounding_margin_left", text="Left")
+
+            # Label Margin
+            box.prop(props, "label_margin", text="Label Margin")
+
+            # Image Margin
+            box.prop(props, "image_margin", text="Image Margin")
             
             # Sprite Consistency
             row = box.row()
@@ -639,9 +759,15 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
 
             # Sprite Align
             row = box.row()
-            split = row.split(factor=0.45)
+            split = row.split(factor=0.60)
             split.label(text="Sprite Align")
             split.prop(props, "sprite_align", text="")
+
+            # Combine Mode
+            row = box.row()
+            split = row.split(factor=0.60)
+            split.label(text="Combine Mode")
+            split.prop(props, "combine_mode", text="")
 
             # Delete Temp Folder
             box.prop(props, "delete_temp_folder", text="Delete Temp Folder")
@@ -670,13 +796,47 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
 
 
         # Create Sprite Sheet Button
+        if props.combine_mode == CombineMode.SHEET.value:
+            create_btn_text = "Create Sprite Sheet"
+        elif props.combine_mode == CombineMode.STRIPS.value:
+            create_btn_text = "Create Sprite Strips"
+        else:
+            create_btn_text = "Create Sprite Images"
+
         layout.separator(factor=0.25)
         row = layout.row()
         row.scale_y = 1.5
-        row.operator("spritesheetmaker.create_sheet", text="Create Sprite Sheet", icon="RENDER_ANIMATION")
+        row.operator("spritesheetmaker.create_sheet", text=create_btn_text, icon="RENDER_ANIMATION")
 
 
 # Param Methods
+def assemble_param_from_props():
+
+    # Get all props
+    props = bpy.context.scene.sprite_sheet_maker_props
+
+
+    # Set assemble parameters
+    param = AssembleParam()
+    param.input_folder_path = props.output_folder
+
+    if(props.combine_mode == CombineMode.SHEET.value):
+        param.output_path = get_sprite_sheet_path()
+    elif(props.combine_mode == CombineMode.STRIPS.value):
+        param.output_path = get_sprite_strips_path()
+    elif(props.combine_mode == CombineMode.IMAGES.value):
+        param.output_path = get_sprite_images_path()
+
+    param.font_size = props.label_font_size
+    param.surrounding_margin = (props.surrounding_margin_top, props.surrounding_margin_right, props.surrounding_margin_bottom, props.surrounding_margin_left)
+    param.label_margin = props.label_margin
+    param.image_margin = props.image_margin
+    param.consistency = SpriteConsistency(props.sprite_consistency)
+    param.align = SpriteAlign(props.sprite_align)
+    param.combine_mode = CombineMode(props.combine_mode)
+
+    return param
+
 def auto_capture_param_from_props():
 
     # Get all props & scene
@@ -707,25 +867,6 @@ def pixelate_param_from_props():
     param.color_amount = props.color_amount
     param.min_alpha = props.min_alpha
     param.alpha_step = props.alpha_step
-    param.shrink_interp = ScaleInterpType(props.shrink_interp)  # Ensure shrink interpolation is properly set
-
-
-    return param
-
-def assemble_param_from_props():
-
-    # Get all props
-    props = bpy.context.scene.sprite_sheet_maker_props
-
-
-    # Set assemble parameters
-    param = AssembleParam()
-    param.input_folder_path = props.output_folder
-    param.output_file_path = get_sprite_sheet_path()
-    param.font_size = props.label_font_size
-    param.margin = props.sprite_margin
-    param.consistency = SpriteConsistency(props.sprite_consistency)
-    param.align = SpriteAlign(props.sprite_align)
 
 
     return param
@@ -739,7 +880,7 @@ def sprite_param_from_props():
     # Set sprite parameters
     param = SpriteParam()
     param.output_file_path = get_sprite_path()
-    param.camera = props.camera_object
+    param.camera = props.custom_camera
 
 
     # Set Auto capture
@@ -779,7 +920,6 @@ def sprite_sheet_param_from_props():
     param = SpriteSheetParam()
     param.animation_strips = animation_strips
     param.temp_folder_path = props.output_folder
-    param.output_file_path = get_sprite_sheet_path()
     param.delete_temp_folder = props.delete_temp_folder
 
 
@@ -795,32 +935,59 @@ def sprite_sheet_param_from_props():
 
 
 # Helper Methods
+def get_label_text():
+
+    # Get the label text of the first strip 
+    scene = bpy.context.scene
+    for strip_item in scene.animation_strips:
+        if(strip_item.label == ""):
+            continue
+    
+        return strip_item.label
+    
+    return UNTITLED_LABEL_TEXT
+
 def get_pixelated_img_path():
 
     # Get all props
     props = bpy.context.scene.sprite_sheet_maker_props
+    file_ext = bpy.context.scene.render.image_settings.file_format.lower()
 
 
     # Add postfix to the file name
     dir_name, file_name = os.path.split(props.pixelate_image_path)
     name, ext = os.path.splitext(file_name)
+    pixelated_output_path = os.path.join(dir_name, f"{name}_{PIXELATE_TEST_IMAGE_POSTFIX}.{file_ext}")
     
-    
-    return os.path.join(dir_name, f"{name}_{PIXELATE_TEST_IMAGE_POSTFIX}{ext}")
+
+    return unique_path(pixelated_output_path)
 
 def get_sprite_sheet_path():
 
     # Get initial path
     props = bpy.context.scene.sprite_sheet_maker_props
     file_ext = bpy.context.scene.render.image_settings.file_format.lower()
-    sprite_sheet_path = f"{props.output_folder}/{SPRITE_SHEET_NAME}.{file_ext}"
+    sprite_sheet_path = unique_path(f"{props.output_folder}/{SPRITE_SHEET_NAME}.{file_ext}")
 
 
-    # If file already exists then add numeric suffix
-    counter = 1
-    while os.path.exists(sprite_sheet_path) and counter < 10000:
-        sprite_sheet_path = f"{props.output_folder}/{SPRITE_SHEET_NAME}_{counter}.{file_ext}"
-        counter += 1
+    return sprite_sheet_path
+
+def get_sprite_strips_path():
+    
+    # Get initial path
+    props = bpy.context.scene.sprite_sheet_maker_props
+    file_ext = bpy.context.scene.render.image_settings.file_format.lower()
+    sprite_sheet_path = unique_path(f"{props.output_folder}/{DEFAULT_OUTPUT_FOLDER_NAME}")
+
+
+    return sprite_sheet_path
+
+def get_sprite_images_path():
+
+    # Get initial path
+    props = bpy.context.scene.sprite_sheet_maker_props
+    file_ext = bpy.context.scene.render.image_settings.file_format.lower()
+    sprite_sheet_path = unique_path(f"{props.output_folder}/{DEFAULT_OUTPUT_FOLDER_NAME}")
 
 
     return sprite_sheet_path
@@ -830,14 +997,7 @@ def get_sprite_path():
     # Get initial path
     props = bpy.context.scene.sprite_sheet_maker_props
     file_ext = bpy.context.scene.render.image_settings.file_format.lower()
-    sprite_path = f"{props.output_folder}/{SINGLE_SPRITE_NAME}.{file_ext}"
-
-
-    # If file already exists then add numeric suffix
-    counter = 1
-    while os.path.exists(sprite_path) and counter < 10000:
-        sprite_path = f"{props.output_folder}/{SINGLE_SPRITE_NAME}_{counter}.{file_ext}"
-        counter += 1
+    sprite_path = unique_path(f"{props.output_folder}/{SINGLE_SPRITE_NAME}.{file_ext}")
 
 
     return sprite_path
@@ -872,11 +1032,13 @@ classes = (
     SpriteSheetMakerStripInfo,
     SPRITESHEETMAKER_UL_AnimationStrips,
     SPRITESHEETMAKER_UL_CaptureItems,
+    SPRITESHEETMAKER_OT_duplicate_strip,
     SPRITESHEETMAKER_OT_add_strip,
     SPRITESHEETMAKER_OT_remove_strip,
     SPRITESHEETMAKER_OT_move_strip,
     SPRITESHEETMAKER_OT_add_capture_item,
     SPRITESHEETMAKER_OT_remove_capture_item,
+    SPRITESHEETMAKER_OT_CreateAutoCamera,
     SPRITESHEETMAKER_OT_PixelateImage,
     SPRITESHEETMAKER_OT_CombineSprites,
     SPRITESHEETMAKER_OT_CreateSingleSprite,
