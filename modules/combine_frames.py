@@ -371,9 +371,13 @@ def combine_into_strips(param:AssembleParam, rows:list[RowData], global_img_wide
     # Create font
     font = ImageFont.load_default(param.font_size) if param.font_size !=0 else None
 
-    
+
     # Make sure folder exists
     create_folder(param.output_path)
+
+
+    # Track label usage for unique filenames
+    label_counters = {}
 
 
     # Iterate and create strips
@@ -437,7 +441,17 @@ def combine_into_strips(param:AssembleParam, rows:list[RowData], global_img_wide
 
         # Save strip
         ext = row_data.images[0].format if len(row_data.images) != 0 else DEFAULT_FILE_FORMAT
-        strip_output_path = os.path.join(param.output_path, f"{row_data.label_text}.{ext.lower()}")
+
+        # Generate unique filename for strips with same/empty label
+        base_label = row_data.label_text if row_data.label_text else "strip"
+        if base_label in label_counters:
+            label_counters[base_label] += 1
+            file_label = f"{base_label}_{label_counters[base_label]}"
+        else:
+            label_counters[base_label] = 1
+            file_label = base_label
+
+        strip_output_path = os.path.join(param.output_path, f"{file_label}.{ext.lower()}")
         print(f"[SpriteSheetMaker {datetime.now()}] Saving strip to '{strip_output_path}' ...")
         strip.save(strip_output_path)
         print(f"[SpriteSheetMaker {datetime.now()}] Successfully saved sprite strip to {strip_output_path}")
