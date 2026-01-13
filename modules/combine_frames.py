@@ -35,6 +35,7 @@ class CombineMode(Enum):
 # Classes
 class RowData:
     def __init__(self):
+        self.animation_name:str = ""  # Internal name for grouping (always set, even for continuation rows)
         self.label_text:str = "Untitled"
         self.label_width:int = 0
         self.label_height:int = 0
@@ -219,6 +220,7 @@ def assemble_images(param:AssembleParam):
 
             # Create row data for this chunk
             row_data = RowData()
+            row_data.animation_name = label_text  # Always set for grouping
 
             # Only first chunk gets the label
             if chunk_idx == 0:
@@ -357,7 +359,7 @@ def combine_into_sheet(param:AssembleParam, rows:list[RowData], global_img_wides
     print(f"[SpriteSheetMaker {datetime.now()}] Successfully saved sprite sheet to {param.output_path}")
 
 def combine_into_strips(param:AssembleParam, rows:list[RowData], global_img_widest:int, global_img_tallest:int):
-    
+
     # Extract from param
     surrounding_margin_top = param.surrounding_margin[0]
     surrounding_margin_right = param.surrounding_margin[1]
@@ -376,82 +378,99 @@ def combine_into_strips(param:AssembleParam, rows:list[RowData], global_img_wide
     create_folder(param.output_path)
 
 
-    # Track label usage for unique filenames
-    label_counters = {}
+    # Group rows by animation_name
+    animation_groups = {}
+    for row_data in rows:
+        anim_name = row_data.animation_name if row_data.animation_name else "strip"
+        if anim_name not in animation_groups:
+            animation_groups[anim_name] = []
+        animation_groups[anim_name].append(row_data)
 
 
-    # Iterate and create strips
-    for row_count, row_data in enumerate(rows):
-        img_count = len(row_data.images)
-        gaps = image_margin * (img_count - 1)
-        if(param.consistency == SpriteConsistency.INDIVIDUAL):
-            row_width = row_data.img_accum_width + gaps
-            img_height = row_data.img_tallest
-        elif(param.consistency == SpriteConsistency.ROW):
-            row_width = row_data.img_widest * img_count + gaps
-            img_height = row_data.img_tallest
-        elif(param.consistency == SpriteConsistency.ALL):
-            row_width = global_img_widest * img_count + gaps
-            img_height = global_img_tallest
+    # Create one multi-row strip per animation
+    for anim_name, group_rows in animation_groups.items():
 
-    
-        # Assign strip height & width
-        strip_width = surrounding_margin_left + max(row_width, row_data.label_width) + surrounding_margin_right
-        strip_height = surrounding_margin_top + row_data.label_height + label_margin + img_height + surrounding_margin_bottom
+        # Calculate dimensions for this animation's strip
+        # Width = widest row, Height = sum of all row heights
+        strip_width = 0
+        strip_height = surrounding_margin_top + surrounding_margin_bottom
+
+        # Get label info from first row (only first row has label)
+        first_row = group_rows[0]
+        if font_size != 0 and first_row.label_text:
+            strip_height += first_row.label_height + label_margin
+
+        # Calculate row dimensions
+        row_heights = []
+        for row_data in group_rows:
+            img_count = len(row_data.images)
+            gaps = image_margin * (img_count - 1)
+
+            if param.consistency == SpriteConsistency.INDIVIDUAL:
+                row_width = row_data.img_accum_width + gaps
+                row_height = row_data.img_tallest
+            elif param.consistency == SpriteConsistency.ROW:
+                row_width = row_data.img_widest * img_count + gaps
+                row_height = row_data.img_tallest
+            elif param.consistency == SpriteConsistency.ALL:
+                row_width = global_img_widest * img_count + gaps
+                row_height = global_img_tallest
+
+            strip_width = max(strip_width, row_width)
+            row_heights.append(row_height)
+            strip_height += row_height
+
+        # Add margins between rows
+        strip_height += image_margin * (len(group_rows) - 1)
+
+        # Add horizontal margins and label width consideration
+        strip_width = surrounding_margin_left + max(strip_width, first_row.label_width) + surrounding_margin_right
 
 
-        # Create strip
-        print(f"[SpriteSheetMaker {datetime.now()}] Creating strip {strip_width}x{strip_height}")
-        img_mode = row_data.images[0].mode if len(row_data.images)!=0 else DEFAULT_COLOR_MODE
+        # Create strip image
+        print(f"[SpriteSheetMaker {datetime.now()}] Creating multi-row strip '{anim_name}' {strip_width}x{strip_height}")
+        img_mode = first_row.images[0].mode if len(first_row.images) != 0 else DEFAULT_COLOR_MODE
         strip = Image.new(img_mode, (int(strip_width), int(strip_height)), (0, 0, 0, 0))
         draw = ImageDraw.Draw(strip)
 
 
-        # Paste label
+        # Paste label (only once at top)
         paste_height = surrounding_margin_top
-        if(font_size != 0):
-            label_location_x = surrounding_margin_left + row_data.label_offset[0]
-            label_location_y = surrounding_margin_top + row_data.label_offset[1]
-            draw.text((label_location_x, label_location_y), row_data.label_text, fill="white", font=font, spacing = 0)
-            paste_height += row_data.label_height + label_margin
+        if font_size != 0 and first_row.label_text:
+            label_location_x = surrounding_margin_left + first_row.label_offset[0]
+            label_location_y = surrounding_margin_top + first_row.label_offset[1]
+            draw.text((label_location_x, label_location_y), first_row.label_text, fill="white", font=font, spacing=0)
+            paste_height += first_row.label_height + label_margin
 
 
-        # Paste images
-        paste_width = surrounding_margin_left
-        for img in row_data.images:
-            
-            # Get cell size
-            large_width, large_height = img.width, row_data.img_tallest
-            if(param.consistency == SpriteConsistency.ROW):
-                large_width, large_height = row_data.img_widest, row_data.img_tallest
-            elif(param.consistency == SpriteConsistency.ALL):
-                large_width, large_height = global_img_widest, global_img_tallest
-            
+        # Paste all rows
+        for row_idx, row_data in enumerate(group_rows):
+            paste_width = surrounding_margin_left
 
-            # Calculate offset based on alignment & consistency
-            offset_x, offset_y = calc_align_offset(param.align, large_width, large_height, img.width, img.height)
+            for img in row_data.images:
+                # Get cell size
+                large_width, large_height = img.width, row_data.img_tallest
+                if param.consistency == SpriteConsistency.ROW:
+                    large_width, large_height = row_data.img_widest, row_data.img_tallest
+                elif param.consistency == SpriteConsistency.ALL:
+                    large_width, large_height = global_img_widest, global_img_tallest
 
+                # Calculate offset based on alignment & consistency
+                offset_x, offset_y = calc_align_offset(param.align, large_width, large_height, img.width, img.height)
 
-            # Paste image
-            img_location_x = paste_width + offset_x
-            img_location_y = paste_height + offset_y
-            strip.paste(img, (int(img_location_x), int(img_location_y)))
-            paste_width += large_width + image_margin
+                # Paste image
+                img_location_x = paste_width + offset_x
+                img_location_y = paste_height + offset_y
+                strip.paste(img, (int(img_location_x), int(img_location_y)))
+                paste_width += large_width + image_margin
+
+            # Move to next row
+            paste_height += row_heights[row_idx] + image_margin
 
 
         # Save strip
-        ext = row_data.images[0].format if len(row_data.images) != 0 else DEFAULT_FILE_FORMAT
-
-        # Generate unique filename for strips with same/empty label
-        base_label = row_data.label_text if row_data.label_text else "strip"
-        if base_label in label_counters:
-            label_counters[base_label] += 1
-            file_label = f"{base_label}_{label_counters[base_label]}"
-        else:
-            label_counters[base_label] = 1
-            file_label = base_label
-
-        strip_output_path = os.path.join(param.output_path, f"{file_label}.{ext.lower()}")
+        ext = first_row.images[0].format if len(first_row.images) != 0 else DEFAULT_FILE_FORMAT
+        strip_output_path = os.path.join(param.output_path, f"{anim_name}.{ext.lower()}")
         print(f"[SpriteSheetMaker {datetime.now()}] Saving strip to '{strip_output_path}' ...")
         strip.save(strip_output_path)
         print(f"[SpriteSheetMaker {datetime.now()}] Successfully saved sprite strip to {strip_output_path}")
