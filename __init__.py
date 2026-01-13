@@ -131,6 +131,13 @@ class SpriteSheetMakerProperties(PropertyGroup):
     surrounding_margin_left: IntProperty(name="Surrounding Margin Left", default=15, min=0, soft_max=1000)
     label_margin: IntProperty(name="Label Margin", default=15, min=0, soft_max=1000)
     image_margin: IntProperty(name="Image Margin", default=15, min=0, soft_max=1000)
+    max_frames_per_row: IntProperty(
+        name="Max Frames Per Row",
+        description="Maximum frames per row (0 = unlimited)",
+        default=0,
+        min=0,
+        soft_max=50
+    )
     sprite_consistency: EnumProperty(
         name="Sprite Align",
         items=[
@@ -750,7 +757,10 @@ class SPRITESHEETMAKER_PT_MainPanel(Panel):
 
             # Image Margin
             box.prop(props, "image_margin", text="Image Margin")
-            
+
+            # Max Frames Per Row
+            box.prop(props, "max_frames_per_row", text="Max Frames Per Row")
+
             # Sprite Consistency
             row = box.row()
             split = row.split(factor=0.60)
@@ -831,6 +841,7 @@ def assemble_param_from_props():
     param.surrounding_margin = (props.surrounding_margin_top, props.surrounding_margin_right, props.surrounding_margin_bottom, props.surrounding_margin_left)
     param.label_margin = props.label_margin
     param.image_margin = props.image_margin
+    param.max_frames_per_row = props.max_frames_per_row
     param.consistency = SpriteConsistency(props.sprite_consistency)
     param.align = SpriteAlign(props.sprite_align)
     param.combine_mode = CombineMode(props.combine_mode)

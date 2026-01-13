@@ -55,6 +55,7 @@ class AssembleParam:
         self.consistency:SpriteConsistency = SpriteConsistency.INDIVIDUAL
         self.align:SpriteAlign = SpriteAlign.BOTTOM_CENTER
         self.combine_mode:CombineMode = CombineMode.SHEET
+        self.max_frames_per_row:int = 0  # 0 = unlimited
 
 
 # Methods
@@ -186,45 +187,59 @@ def assemble_images(param:AssembleParam):
     print(f"[SpriteSheetMaker {datetime.now()}] Found {len(action_folders)} action sub folders")
 
 
-    # Assign row data from folders 
+    # Assign row data from folders
     global_img_widest:int = 0
     global_img_tallest:int = 0
     rows:list[RowData] = []
     for action_folder in action_folders:
 
-        # Create row data
-        row_data = RowData()
+        # Get label info for this action
+        label_text = action_folder.split('_', 1)[1]
+        label_bbox = (0, 0, 0, 0) if param.font_size == 0 else font.getbbox(label_text)
+        label_width = (label_bbox[2] - label_bbox[0])
+        label_height = (label_bbox[3] - label_bbox[1])
+        label_offset = (0, -label_bbox[1])
 
 
-        # Add label to row data
-        row_data.label_text = action_folder.split('_', 1)[1]
-        label_bbox = (0, 0, 0, 0) if param.font_size == 0 else font.getbbox(row_data.label_text)
-        row_data.label_width = (label_bbox[2] - label_bbox[0])
-        row_data.label_height = (label_bbox[3] - label_bbox[1]) 
-        row_data.label_offset = (0, -label_bbox[1])
-
-
-        # Images
+        # Load all images for this action
         abs_action_folder = os.path.join(param.input_folder_path, action_folder)
         img_names = sorted(os.listdir(abs_action_folder), key=lambda x: int(x.split('.')[0]))
+        all_images = []
         for img_name in img_names:
-
-            # Add image to row data
             img = Image.open(os.path.join(abs_action_folder, img_name))
-            row_data.images.append(img)
-
-            # Add accumulated width, widest img width & tallest img height to row data
-            row_data.img_accum_width += img.width
-            row_data.img_widest = max(row_data.img_widest, img.width)
-            row_data.img_tallest = max(row_data.img_tallest, img.height)
-
-            # Calculate widest & tallest images amongst all
+            all_images.append(img)
             global_img_widest = max(global_img_widest, img.width)
             global_img_tallest = max(global_img_tallest, img.height)
 
 
-        # Append row data
-        rows.append(row_data)
+        # Split images into chunks based on max_frames_per_row
+        max_per_row = param.max_frames_per_row if param.max_frames_per_row > 0 else len(all_images)
+        for chunk_idx in range(0, len(all_images), max_per_row):
+            chunk = all_images[chunk_idx:chunk_idx + max_per_row]
+
+            # Create row data for this chunk
+            row_data = RowData()
+
+            # Only first chunk gets the label
+            if chunk_idx == 0:
+                row_data.label_text = label_text
+                row_data.label_width = label_width
+                row_data.label_height = label_height
+                row_data.label_offset = label_offset
+            else:
+                row_data.label_text = ""
+                row_data.label_width = 0
+                row_data.label_height = 0
+                row_data.label_offset = (0, 0)
+
+            # Add images and calculate dimensions
+            for img in chunk:
+                row_data.images.append(img)
+                row_data.img_accum_width += img.width
+                row_data.img_widest = max(row_data.img_widest, img.width)
+                row_data.img_tallest = max(row_data.img_tallest, img.height)
+
+            rows.append(row_data)
 
 
     # Combine into sheet or strips 
